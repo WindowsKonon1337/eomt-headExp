@@ -20,10 +20,12 @@ from lightning.pytorch.loops.fetchers import _DataFetcher, _DataLoaderIterDataFe
 
 from training.lightning_module import LightningModule
 from datasets.lightning_data_module import LightningDataModule
+from training.csv_metrics_callback import CSVMetricsCallback
 
 # Suppress PyTorch FX warnings for DINOv3 models
 import os
 os.environ["TORCH_LOGS"] = "-dynamo"
+os.environ.setdefault("WANDB_MODE", "offline")
 
 
 _orig_single = _t.raise_unexpected_value
@@ -168,9 +170,12 @@ def cli_main():
         trainer_defaults={
             "precision": "16-mixed",
             "enable_model_summary": False,
+            "enable_progress_bar": True,
+            "log_every_n_steps": 1,
             "callbacks": [
                 ModelSummary(max_depth=3),
                 LearningRateMonitor(logging_interval="epoch"),
+                CSVMetricsCallback(output_path="logs/metrics.csv"),
             ],
             "devices": 1,
             "gradient_clip_val": 0.01,

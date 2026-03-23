@@ -6,7 +6,7 @@
 # used under the Apache 2.0 License.
 # ---------------------------------------------------------------
 
-from typing import Optional
+from typing import Optional, Literal
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -23,12 +23,15 @@ class EoMT(nn.Module):
         num_q,
         num_blocks=4,
         masked_attn_enabled=True,
+        mask_head_type: Literal["cnn", "kan"] = "cnn",
+        kan_basis_size: int = 8,
     ):
         super().__init__()
         self.encoder = encoder
         self.num_q = num_q
         self.num_blocks = num_blocks
         self.masked_attn_enabled = masked_attn_enabled
+        self.mask_head_type = mask_head_type
 
         self.register_buffer("attn_mask_probs", torch.ones(num_blocks))
 
@@ -36,13 +39,8 @@ class EoMT(nn.Module):
 
         self.class_head = nn.Linear(self.encoder.backbone.embed_dim, num_classes + 1)
 
-        self.mask_head = nn.Sequential(
-            nn.Linear(self.encoder.backbone.embed_dim, self.encoder.backbone.embed_dim),
-            nn.GELU(),
-            nn.Linear(self.encoder.backbone.embed_dim, self.encoder.backbone.embed_dim),
-            nn.GELU(),
-            nn.Linear(self.encoder.backbone.embed_dim, self.encoder.backbone.embed_dim),
-        )
+        embed_dim = self.encoder.backbone.embed_dim
+        self.mask_head = self._build_mask_head(embed_dim, mask_head_type, kan_basis_size)
 
         patch_size = encoder.backbone.patch_embed.patch_size
         max_patch_size = max(patch_size[0], patch_size[1])
@@ -51,6 +49,30 @@ class EoMT(nn.Module):
         self.upscale = nn.Sequential(
             *[ScaleBlock(self.encoder.backbone.embed_dim) for _ in range(num_upscale)],
         )
+
+    def _build_mask_head(
+        self,
+        embed_dim: int,
+        mask_head_type: Literal["cnn", "kan"],
+        kan_basis_size: int,
+    ) -> nn.Module:
+        if mask_head_type == "cnn":
+            # 1D conv over the query axis (kernel_size=1) for a drop-in token head.
+            return nn.Sequential(
+                nn.Conv1d(embed_dim, embed_dim, kernel_size=1),
+                nn.GELU(),
+                nn.Conv1d(embed_dim, embed_dim, kernel_size=1),
+                nn.GELU(),
+                nn.Conv1d(embed_dim, embed_dim, kernel_size=1),
+            )
+        if mask_head_type == "kan":
+            return KANQueryHead(embed_dim, embed_dim, num_basis=kan_basis_size)
+        raise ValueError(f"Unsupported mask_head_type: {mask_head_type}")
+
+    def _apply_mask_head(self, q: torch.Tensor) -> torch.Tensor:
+        if self.mask_head_type == "cnn":
+            return self.mask_head(q.transpose(1, 2)).transpose(1, 2)
+        return self.mask_head(q)
 
     def _predict(self, x: torch.Tensor):
         q = x[:, : self.num_q, :]
@@ -62,9 +84,7 @@ class EoMT(nn.Module):
             x.shape[0], -1, *self.encoder.backbone.patch_embed.grid_size
         )
 
-        mask_logits = torch.einsum(
-            "bqc, bchw -> bqhw", self.mask_head(q), self.upscale(x)
-        )
+        mask_logits = torch.einsum("bqc, bchw -> bqhw", self._apply_mask_head(q), self.upscale(x))
 
         return mask_logits, class_logits
 
@@ -202,3 +222,20 @@ class EoMT(nn.Module):
             mask_logits_per_layer,
             class_logits_per_layer,
         )
+
+
+class KANQueryHead(nn.Module):
+    def __init__(self, in_dim: int, out_dim: int, num_basis: int = 8):
+        super().__init__()
+        self.base = nn.Linear(in_dim, out_dim)
+        self.spline = nn.Linear(in_dim * num_basis, out_dim)
+        self.num_basis = num_basis
+        grid = torch.linspace(-1.0, 1.0, steps=num_basis).view(1, 1, 1, num_basis)
+        self.register_buffer("grid", grid)
+        self.scale = nn.Parameter(torch.ones(in_dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        scaled = x / self.scale.clamp_min(1e-6)
+        basis = torch.exp(-((scaled.unsqueeze(-1) - self.grid) ** 2))
+        basis = basis.reshape(x.shape[0], x.shape[1], -1)
+        return self.base(x) + self.spline(basis)

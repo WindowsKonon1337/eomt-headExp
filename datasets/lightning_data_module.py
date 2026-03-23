@@ -5,6 +5,7 @@
 
 
 from typing import Optional
+import os
 import torch
 import lightning
 
@@ -24,7 +25,13 @@ class LightningDataModule(lightning.LightningDataModule):
     ) -> None:
         super().__init__()
 
-        self.path = path
+        resolved_path = path if path is not None else os.getenv("DATA_PATH")
+        if resolved_path is None:
+            raise ValueError(
+                "Dataset path is not set. Pass `--data.path /path/to/dataset` "
+                "or set the `DATA_PATH` environment variable."
+            )
+        self.path = str(resolved_path)
         self.check_empty_targets = check_empty_targets
         self.ignore_idx = ignore_idx
         self.img_size = img_size

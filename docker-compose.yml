@@ -1,0 +1,21 @@
+services:
+  train:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: eomt-train:latest
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace
+      - ${DATA_PATH:-./datasets}:/data
+    environment:
+      WANDB_API_KEY: ${WANDB_API_KEY:-}
+      WANDB_MODE: ${WANDB_MODE:-offline}
+      TORCH_LOGS: -dynamo
+    shm_size: "16gb"
+    command: >
+      uv run python main.py fit
+      -c ${CONFIG_PATH:-configs/dinov2/coco/panoptic/eomt_base_640.yaml}
+      --data.path ${DATA_CONTAINER_PATH:-/data}
+      --trainer.devices ${TRAINER_DEVICES:-1}
+      --data.batch_size ${BATCH_SIZE:-1}
