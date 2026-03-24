@@ -63,6 +63,14 @@ class CSVMetricsCallback(Callback):
         }
         self._write_metrics(trainer, "train", metrics)
 
+    def on_train_epoch_end(self, trainer, pl_module):
+        metrics = {
+            k: v
+            for k, v in trainer.callback_metrics.items()
+            if k.startswith("metrics/train_")
+        }
+        self._write_metrics(trainer, "train", metrics)
+
     def on_validation_epoch_end(self, trainer, pl_module):
         metrics = {
             k: v

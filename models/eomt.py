@@ -13,6 +13,7 @@ import torch.nn.functional as F
 import math
 
 from models.scale_block import ScaleBlock
+from fastkan import FastKAN
 
 
 class EoMT(nn.Module):
@@ -23,7 +24,7 @@ class EoMT(nn.Module):
         num_q,
         num_blocks=4,
         masked_attn_enabled=True,
-        mask_head_type: Literal["cnn", "kan"] = "cnn",
+        mask_head_type: Literal["mlp", "cnn", "kan"] = "cnn",
         kan_basis_size: int = 8,
     ):
         super().__init__()
@@ -53,9 +54,17 @@ class EoMT(nn.Module):
     def _build_mask_head(
         self,
         embed_dim: int,
-        mask_head_type: Literal["cnn", "kan"],
+        mask_head_type: Literal["mlp", "cnn", "kan"],
         kan_basis_size: int,
     ) -> nn.Module:
+        if mask_head_type == "mlp":
+            return nn.Sequential(
+                nn.Linear(embed_dim, embed_dim),
+                nn.GELU(),
+                nn.Linear(embed_dim, embed_dim),
+                nn.GELU(),
+                nn.Linear(embed_dim, embed_dim),
+            )
         if mask_head_type == "cnn":
             # 1D conv over the query axis (kernel_size=1) for a drop-in token head.
             return nn.Sequential(
@@ -66,7 +75,7 @@ class EoMT(nn.Module):
                 nn.Conv1d(embed_dim, embed_dim, kernel_size=1),
             )
         if mask_head_type == "kan":
-            return KANQueryHead(embed_dim, embed_dim, num_basis=kan_basis_size)
+            return FastKANQueryHead(embed_dim, embed_dim, num_basis=kan_basis_size)
         raise ValueError(f"Unsupported mask_head_type: {mask_head_type}")
 
     def _apply_mask_head(self, q: torch.Tensor) -> torch.Tensor:
@@ -224,18 +233,16 @@ class EoMT(nn.Module):
         )
 
 
-class KANQueryHead(nn.Module):
+class FastKANQueryHead(nn.Module):
     def __init__(self, in_dim: int, out_dim: int, num_basis: int = 8):
         super().__init__()
-        self.base = nn.Linear(in_dim, out_dim)
-        self.spline = nn.Linear(in_dim * num_basis, out_dim)
-        self.num_basis = num_basis
-        grid = torch.linspace(-1.0, 1.0, steps=num_basis).view(1, 1, 1, num_basis)
-        self.register_buffer("grid", grid)
-        self.scale = nn.Parameter(torch.ones(in_dim))
+        # fastKAN expects [batch, features]. We apply it per query token.
+        self.net = FastKAN(
+            layers_hidden=[in_dim, in_dim, out_dim],
+            num_grids=num_basis,
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        scaled = x / self.scale.clamp_min(1e-6)
-        basis = torch.exp(-((scaled.unsqueeze(-1) - self.grid) ** 2))
-        basis = basis.reshape(x.shape[0], x.shape[1], -1)
-        return self.base(x) + self.spline(basis)
+        b, q, c = x.shape
+        out = self.net(x.reshape(b * q, c))
+        return out.reshape(b, q, -1)

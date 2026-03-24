@@ -7,6 +7,7 @@
 from typing import List, Optional
 import torch.nn as nn
 import torch.nn.functional as F
+from torchmetrics.detection import PanopticQuality
 
 from training.mask_classification_loss import MaskClassificationLoss
 from training.lightning_module import LightningModule
@@ -84,6 +85,16 @@ class MaskClassificationPanoptic(LightningModule):
             stuff_classes,
             self.network.num_blocks + 1 if self.network.masked_attn_enabled else 1,
         )
+        self.train_metrics = nn.ModuleList(
+            [
+                PanopticQuality(
+                    thing_classes,
+                    stuff_classes + [self.num_classes],
+                    return_sq_and_rq=True,
+                    return_per_class=True,
+                )
+            ]
+        )
 
     def eval_step(
         self,
@@ -115,6 +126,95 @@ class MaskClassificationPanoptic(LightningModule):
                 self.overlap_thresh,
             )
             self.update_metrics_panoptic(preds, targets, is_crowds, i)
+
+    def training_step(self, batch, batch_idx):
+        imgs, targets = batch
+
+        mask_logits_per_block, class_logits_per_block = self(imgs)
+
+        losses_all_blocks = {}
+        for i, (mask_logits, class_logits) in enumerate(
+            list(zip(mask_logits_per_block, class_logits_per_block))
+        ):
+            losses = self.criterion(
+                masks_queries_logits=mask_logits,
+                class_queries_logits=class_logits,
+                targets=targets,
+            )
+            block_postfix = self.block_postfix(i)
+            losses = {f"{key}{block_postfix}": value for key, value in losses.items()}
+            losses_all_blocks |= losses
+
+        final_mask_logits = F.interpolate(
+            mask_logits_per_block[-1].detach(), self.img_size, mode="bilinear"
+        )
+        final_class_logits = class_logits_per_block[-1].detach()
+        train_preds = self.to_per_pixel_preds_panoptic(
+            [final_mask_logits[i] for i in range(final_mask_logits.shape[0])],
+            final_class_logits,
+            self.stuff_classes,
+            self.mask_thresh,
+            self.overlap_thresh,
+        )
+        train_targets = self.to_per_pixel_targets_panoptic(targets)
+        train_is_crowds = [target["is_crowd"] for target in targets]
+        original_metrics = self.metrics
+        self.metrics = self.train_metrics
+        self.update_metrics_panoptic(train_preds, train_targets, train_is_crowds, 0)
+        self.metrics = original_metrics
+
+        return self.criterion.loss_total(losses_all_blocks, self.log)
+
+    def validation_step(self, batch, batch_idx=0):
+        imgs, targets = batch
+
+        img_sizes = [img.shape[-2:] for img in imgs]
+        transformed_imgs = self.resize_and_pad_imgs_instance_panoptic(imgs)
+        mask_logits_per_layer, class_logits_per_layer = self(transformed_imgs)
+
+        val_losses = self.criterion(
+            masks_queries_logits=mask_logits_per_layer[-1],
+            class_queries_logits=class_logits_per_layer[-1],
+            targets=targets,
+        )
+        for key, value in val_losses.items():
+            self.log(f"losses/val_{key}", value, on_epoch=True, sync_dist=True)
+        self.log(
+            "losses/val_loss_total",
+            (
+                val_losses["loss_mask"] * self.criterion.mask_coefficient
+                + val_losses["loss_dice"] * self.criterion.dice_coefficient
+                + val_losses["loss_cross_entropy"] * self.criterion.class_coefficient
+            ),
+            on_epoch=True,
+            sync_dist=True,
+            prog_bar=True,
+        )
+
+        is_crowds = [target["is_crowd"] for target in targets]
+        per_pixel_targets = self.to_per_pixel_targets_panoptic(targets)
+
+        for i, (mask_logits, class_logits) in enumerate(
+            list(zip(mask_logits_per_layer, class_logits_per_layer))
+        ):
+            mask_logits = F.interpolate(mask_logits, self.img_size, mode="bilinear")
+            mask_logits = self.revert_resize_and_pad_logits_instance_panoptic(
+                mask_logits, img_sizes
+            )
+            preds = self.to_per_pixel_preds_panoptic(
+                mask_logits,
+                class_logits,
+                self.stuff_classes,
+                self.mask_thresh,
+                self.overlap_thresh,
+            )
+            self.update_metrics_panoptic(preds, per_pixel_targets, is_crowds, i)
+
+    def on_train_epoch_end(self):
+        original_metrics = self.metrics
+        self.metrics = self.train_metrics
+        self._on_eval_epoch_end_panoptic("train")
+        self.metrics = original_metrics
 
     def on_validation_epoch_end(self):
         self._on_eval_epoch_end_panoptic("val")

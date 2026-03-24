@@ -59,7 +59,8 @@ uv sync --python 3.13.2
 wandb login
 ```
 
-Training metrics are also logged to CSV at `logs/metrics.csv` and live training loss is printed to the terminal progress bar.
+Training metrics are logged to `artifacts/metrics/metrics.csv` and checkpoints to `artifacts/checkpoints/`.
+Live training loss is printed to the terminal progress bar.
 
 ## Data preparation
 
@@ -136,11 +137,21 @@ BATCH_SIZE=4 \
 docker compose up --build train
 ```
 
-The compose service mounts this repository into the container and maps `DATA_PATH` to `/data`.
+The compose service maps:
+- dataset: `DATA_PATH` -> `/data`
+- artifacts: `ARTIFACTS_PATH` -> `/artifacts` (checkpoints, CSV metrics, wandb offline files)
 
 ### Mask head variants
 
-The first experiment (MLP replacement) is a CNN head:
+Baseline MLP head (3-layer MLP):
+
+```bash
+uv run python main.py fit \
+  -c configs/dinov2/coco/panoptic/eomt_base_640_mlp.yaml \
+  --data.path /path/to/dataset
+```
+
+CNN head experiment (3 convolutional layers over query tokens):
 
 ```bash
 uv run python main.py fit \
@@ -148,9 +159,7 @@ uv run python main.py fit \
   --data.path /path/to/dataset
 ```
 
-This uses `mask_head_type: cnn` (3 convolutional layers over query tokens), replacing the previous 3-layer MLP.
-
-For the second experiment, use a KAN-style head:
+KAN head experiment using `fastKAN`:
 
 ```bash
 uv run python main.py fit \

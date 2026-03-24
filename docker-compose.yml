@@ -1,5 +1,6 @@
 services:
   train:
+    gpus: all
     build:
       context: .
       dockerfile: Dockerfile
@@ -8,14 +9,20 @@ services:
     volumes:
       - ./:/workspace
       - ${DATA_PATH:-./datasets}:/data
+      - ${ARTIFACTS_PATH:-./artifacts}:/artifacts
     environment:
       WANDB_API_KEY: ${WANDB_API_KEY:-}
       WANDB_MODE: ${WANDB_MODE:-offline}
       TORCH_LOGS: -dynamo
+      OUTPUT_DIR: /artifacts
+      WANDB_DIR: /artifacts/wandb
     shm_size: "16gb"
     command: >
       uv run python main.py fit
-      -c ${CONFIG_PATH:-configs/dinov2/coco/panoptic/eomt_base_640.yaml}
-      --data.path ${DATA_CONTAINER_PATH:-/data}
+      -c ${CONFIG_PATH:-configs/dinov2/coco/panoptic/eomt_base_640_cnn.yaml}
+      --data.path ${DATA_CONTAINER_PATH:-./datasets/coco}
       --trainer.devices ${TRAINER_DEVICES:-1}
       --data.batch_size ${BATCH_SIZE:-1}
+      --model.network.mask_head_type cnn
+      --trainer.num_sanity_val_steps 0
+      --trainer.val_check_interval 1000

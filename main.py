@@ -14,7 +14,7 @@ import logging
 import torch
 import warnings
 from lightning.pytorch import cli
-from lightning.pytorch.callbacks import ModelSummary, LearningRateMonitor
+from lightning.pytorch.callbacks import ModelSummary, LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loops.training_epoch_loop import _TrainingEpochLoop
 from lightning.pytorch.loops.fetchers import _DataFetcher, _DataLoaderIterDataFetcher
 
@@ -26,6 +26,7 @@ from training.csv_metrics_callback import CSVMetricsCallback
 import os
 os.environ["TORCH_LOGS"] = "-dynamo"
 os.environ.setdefault("WANDB_MODE", "offline")
+OUTPUT_DIR = os.getenv("OUTPUT_DIR", "artifacts")
 
 
 _orig_single = _t.raise_unexpected_value
@@ -175,8 +176,16 @@ def cli_main():
             "callbacks": [
                 ModelSummary(max_depth=3),
                 LearningRateMonitor(logging_interval="epoch"),
-                CSVMetricsCallback(output_path="logs/metrics.csv"),
+                ModelCheckpoint(
+                    dirpath=f"{OUTPUT_DIR}/checkpoints",
+                    filename="epoch{epoch:02d}-step{step}",
+                    save_last=True,
+                    save_top_k=-1,
+                    every_n_epochs=1,
+                ),
+                CSVMetricsCallback(output_path=f"{OUTPUT_DIR}/metrics/metrics.csv"),
             ],
+            "default_root_dir": OUTPUT_DIR,
             "devices": 1,
             "gradient_clip_val": 0.01,
             "gradient_clip_algorithm": "norm",

@@ -1,0 +1,10 @@
+.git
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+datasets/
+logs/
+wandb/
+.ipynb_checkpoints/
