@@ -370,30 +370,85 @@ class StrawberryPanoptic(LightningDataModule):
             for key in ["img_folder_path_in_zip", "target_folder_path_in_zip", "annotations_json_path_in_zip"]:
                 dataset_kwargs[key] = Path(dataset_kwargs[key].as_posix())
             
-            self.train_dataset = StrawberryDataset(
+            # Create the full dataset first with NO transforms (SubsetDataset will apply appropriate transforms)
+            full_dataset = StrawberryDataset(
+                zip_path=zip_path,
+                flat_masks=(not has_mask_subdirs),
+                transforms=None,  # No transforms on full dataset - SubsetDataset will apply them
+                **dataset_kwargs,
+            )
+            
+            # Calculate split indices
+            total_images = len(full_dataset)
+            split_idx = int(total_images * self.train_split)
+            
+            train_indices = list(range(0, split_idx))
+            val_indices = list(range(split_idx, total_images))
+            
+            # Import SubsetDataset
+            from datasets.subset_dataset import SubsetDataset
+            
+            # Create train and val subsets with appropriate transforms
+            self.train_dataset = SubsetDataset(
+                full_dataset,
+                train_indices,
                 transforms=self.transforms,
-                zip_path=zip_path,
-                flat_masks=(not has_mask_subdirs),
-                **dataset_kwargs,
             )
-            self.val_dataset = StrawberryDataset(
-                zip_path=zip_path,
-                flat_masks=(not has_mask_subdirs),
-                **dataset_kwargs,
+            
+            # Val dataset uses no augmentation (only resizing)
+            val_transforms = Transforms(
+                img_size=self.transforms.img_size,
+                color_jitter_enabled=False,
+                scale_range=(1.0, 1.0),  # No scaling
             )
+            
+            self.val_dataset = SubsetDataset(
+                full_dataset,
+                val_indices,
+                transforms=val_transforms,
+            )
+            
+            print(f"Dataset split: {len(train_indices)} train, {len(val_indices)} val (split={self.train_split})")
         else:
             # Path is a directory
-            self.train_dataset = StrawberryDataset(
+            full_dataset = StrawberryDataset(
+                zip_path=zip_path,
+                flat_masks=False,
+                transforms=None,  # No transforms on full dataset - SubsetDataset will apply them
+                **dataset_kwargs,
+            )
+            
+            # Calculate split indices
+            total_images = len(full_dataset)
+            split_idx = int(total_images * self.train_split)
+            
+            train_indices = list(range(0, split_idx))
+            val_indices = list(range(split_idx, total_images))
+            
+            # Import SubsetDataset
+            from datasets.subset_dataset import SubsetDataset
+            
+            # Create train and val subsets with appropriate transforms
+            self.train_dataset = SubsetDataset(
+                full_dataset,
+                train_indices,
                 transforms=self.transforms,
-                zip_path=zip_path,
-                flat_masks=False,
-                **dataset_kwargs,
             )
-            self.val_dataset = StrawberryDataset(
-                zip_path=zip_path,
-                flat_masks=False,
-                **dataset_kwargs,
+            
+            # Val dataset uses no augmentation
+            val_transforms = Transforms(
+                img_size=self.transforms.img_size,
+                color_jitter_enabled=False,
+                scale_range=(1.0, 1.0),
             )
+            
+            self.val_dataset = SubsetDataset(
+                full_dataset,
+                val_indices,
+                transforms=val_transforms,
+            )
+            
+            print(f"Dataset split: {len(train_indices)} train, {len(val_indices)} val (split={self.train_split})")
 
         return self
 

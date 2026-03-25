@@ -21,7 +21,9 @@ class SubsetDataset(torch.utils.data.Dataset):
         """
         self.dataset = dataset
         self.indices = indices
-        self.transforms = transforms if transforms is not None else dataset.transforms
+        self.original_transforms = dataset.transforms if hasattr(dataset, 'transforms') else None
+        # Store the override transforms separately
+        self.override_transforms = transforms
     
     def __len__(self):
         return len(self.indices)
@@ -29,7 +31,17 @@ class SubsetDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int):
         # Map the local index to the actual dataset index
         actual_idx = self.indices[idx]
-        return self.dataset[actual_idx]
+        
+        # Temporarily override dataset's transforms if needed
+        if self.override_transforms is not None:
+            original_ds_transforms = self.dataset.transforms
+            self.dataset.transforms = self.override_transforms
+            item = self.dataset[actual_idx]
+            self.dataset.transforms = original_ds_transforms
+        else:
+            item = self.dataset[actual_idx]
+        
+        return item
     
     def close(self):
         """Close the underlying dataset if it has a close method."""

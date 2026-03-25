@@ -181,9 +181,10 @@ class StrawberryDataset(LightningDataModule):
             for key in ["img_folder_path_in_zip", "target_folder_path_in_zip", "annotations_json_path_in_zip"]:
                 dataset_kwargs[key] = Path(dataset_kwargs[key].as_posix())
         
-        # Create the full dataset first
+        # Create the full dataset first with NO transforms (SubsetDataset will apply appropriate transforms)
         full_dataset = Dataset(
             zip_path=zip_path,
+            transforms=None,  # No transforms on full dataset - SubsetDataset will apply them
             **dataset_kwargs,
         )
         
