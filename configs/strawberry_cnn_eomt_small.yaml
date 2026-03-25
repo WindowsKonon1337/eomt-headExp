@@ -1,0 +1,64 @@
+# ---------------------------------------------------------------
+# Truncated Configuration for EoMT with CNN Mask Head on Strawberry Dataset
+# Optimized for CUDA memory with reduced model size
+# ---------------------------------------------------------------
+
+model:
+  class_path: training.mask_classification_instance.MaskClassificationInstance
+  init_args:
+    network:
+      class_path: models.eomt.EoMT
+      init_args:
+        num_classes: 4
+        num_q: 100  # Reduced from 100
+        num_blocks: 3  # Reduced from 4
+        masked_attn_enabled: true
+        mask_head_type: cnn
+        kan_basis_size: 8
+        encoder:
+          class_path: models.vit.ViT
+          init_args:
+            img_size: [640, 640]
+            patch_size: 16
+            backbone_name: "vit_base_patch14_reg4_dinov2"  # Reduced from vit_large
+            ckpt_path: null
+    img_size: [640, 640]
+    num_classes: 4
+    lr: 0.0001
+    llrd: 0.9
+    llrd_l2_enabled: false
+    lr_mult: 1.0
+    weight_decay: 0.0001
+    poly_power: 1.0
+    warmup_steps: [100, 1000]
+    attn_mask_annealing_enabled: false
+    attn_mask_annealing_start_steps: null
+    attn_mask_annealing_end_steps: null
+    delta_weights: false
+    load_ckpt_class_head: true
+    no_object_coefficient: 0.1
+    mask_coefficient: 5.0
+    dice_coefficient: 5.0
+    class_coefficient: 2.0
+
+data:
+  class_path: datasets.coco_panoptic.StrawberryPanoptic
+  init_args:
+    path: ./strawberry_dataset.zip
+    batch_size: 1
+    num_workers: 4
+    img_size: [640, 640]
+    num_classes: 4
+    color_jitter_enabled: true
+    scale_range: [0.8, 1.2]
+    check_empty_targets: true
+    train_split: 0.8
+
+trainer:
+  max_epochs: 50
+  accelerator: gpu
+  devices: [0]
+  num_sanity_val_steps: 0
+  log_every_n_steps: 10
+  precision: 32
+  gradient_clip_val: 1.0

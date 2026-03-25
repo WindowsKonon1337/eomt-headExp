@@ -100,55 +100,63 @@ class LightningModule(lightning.LightningModule):
         self.log = torch.compiler.disable(self.log)  # type: ignore
 
     def configure_optimizers(self):
-        encoder_param_names = {
-            n for n, _ in self.network.encoder.backbone.named_parameters()
-        }
-        backbone_param_groups = []
-        other_param_groups = []
-        backbone_blocks = len(self.network.encoder.backbone.blocks)
-        block_i = backbone_blocks
+        # Handle different model architectures
+        if hasattr(self.network, 'encoder'):
+            # Vision Transformer-based models (DINOv2, ViT)
+            encoder_param_names = {
+                n for n, _ in self.network.encoder.backbone.named_parameters()
+            }
+            backbone_param_groups = []
+            other_param_groups = []
+            backbone_blocks = len(self.network.encoder.backbone.blocks)
+            block_i = backbone_blocks
 
-        l2_blocks = torch.arange(
-            backbone_blocks - self.network.num_blocks, backbone_blocks
-        ).tolist()
+            l2_blocks = torch.arange(
+                backbone_blocks - self.network.num_blocks, backbone_blocks
+            ).tolist()
 
-        for name, param in reversed(list(self.named_parameters())):
-            lr = self.lr
+            for name, param in reversed(list(self.named_parameters())):
+                lr = self.lr
 
-            if name.replace("network.encoder.backbone.", "") in encoder_param_names:
-                name_list = name.split(".")
+                if name.replace("network.encoder.backbone.", "") in encoder_param_names:
+                    name_list = name.split(".")
 
-                is_block = False
-                for i, key in enumerate(name_list):
-                    if key == "blocks":
-                        block_i = int(name_list[i + 1])
-                        is_block = True
+                    is_block = False
+                    for i, key in enumerate(name_list):
+                        if key == "blocks":
+                            block_i = int(name_list[i + 1])
+                            is_block = True
 
-                if is_block or block_i == 0:
-                    lr *= self.llrd ** (backbone_blocks - 1 - block_i)
+                    if is_block or block_i == 0:
+                        lr *= self.llrd ** (backbone_blocks - 1 - block_i)
 
-                elif (is_block or block_i == 0) and self.lr_mult != 1.0:
-                    lr *= self.lr_mult
+                    elif (is_block or block_i == 0) and self.lr_mult != 1.0:
+                        lr *= self.lr_mult
 
-                if "backbone.norm" in name:
-                    lr = self.lr
+                    if "backbone.norm" in name:
+                        lr = self.lr
 
-                if (
-                    is_block
-                    and (block_i in l2_blocks)
-                    and ((not self.llrd_l2_enabled) or (self.lr_mult != 1.0))
-                ):
-                    lr = self.lr
+                    if (
+                        is_block
+                        and (block_i in l2_blocks)
+                        and ((not self.llrd_l2_enabled) or (self.lr_mult != 1.0))
+                    ):
+                        lr = self.lr
 
-                backbone_param_groups.append(
-                    {"params": [param], "lr": lr, "name": name}
-                )
-            else:
-                other_param_groups.append(
-                    {"params": [param], "lr": self.lr, "name": name}
-                )
+                    backbone_param_groups.append(
+                        {"params": [param], "lr": lr, "name": name}
+                    )
+                else:
+                    other_param_groups.append(
+                        {"params": [param], "lr": self.lr, "name": name}
+                    )
 
-        param_groups = backbone_param_groups + other_param_groups
+            param_groups = backbone_param_groups + other_param_groups
+        else:
+            # CNN-based models (ResNet, etc.)
+            param_groups = [{"params": self.network.parameters(), "lr": self.lr}]
+            backbone_param_groups = []
+
         optimizer = AdamW(param_groups, weight_decay=self.weight_decay)
 
         scheduler = TwoStageWarmupPolySchedule(

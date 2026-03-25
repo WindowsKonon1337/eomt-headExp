@@ -3,7 +3,7 @@ name = "eomt"
 version = "0.1.0"
 description = "Encoder-only Mask Transformer training code"
 readme = "README.md"
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.11,<3.12"
 dependencies = [
     "fastkan",
     "fvcore==0.1.5.post20221221",
@@ -13,7 +13,7 @@ dependencies = [
     "lightning==2.5.1.post0",
     "matplotlib==3.10.1",
     "pandas==2.2.3",
-    "pycocotools==2.0.8",
+    "pycocotools>=2.0",
     "scipy==1.15.2",
     "timm==1.0.15",
     "torch==2.7.0",
@@ -25,6 +25,14 @@ dependencies = [
 
 [tool.uv]
 package = false
+environments = ["sys_platform == 'win32'"]
 
 [tool.uv.sources]
 fastkan = { git = "https://github.com/ZiyaoLi/fast-kan.git" }
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

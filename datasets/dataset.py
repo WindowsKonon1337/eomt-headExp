@@ -18,6 +18,59 @@ from torchvision import tv_tensors
 from torchvision.transforms.v2 import functional as F
 
 
+class DirectoryZipAdapter:
+    """Adapter to make a directory behave like a ZipFile"""
+    def __init__(self, directory_path: Path):
+        self.directory_path = Path(directory_path)
+        if not self.directory_path.is_dir():
+            raise NotADirectoryError(f"{directory_path} is not a directory")
+    
+    def open(self, filename: str, mode: str = 'r'):
+        """Open a file from the directory"""
+        file_path = self.directory_path / filename
+        if not file_path.exists():
+            raise KeyError(f"No such file: {filename}")
+        if mode == 'r':
+            return open(file_path, 'rb')
+        else:
+            return open(file_path, mode)
+    
+    def namelist(self):
+        """Return list of all files in the directory as relative paths with forward slashes"""
+        files = []
+        for file_path in self.directory_path.rglob('*'):
+            if file_path.is_file():
+                rel_path = file_path.relative_to(self.directory_path).as_posix()
+                files.append(rel_path)
+            else:
+                rel_path = file_path.relative_to(self.directory_path).as_posix()
+                files.append(rel_path + '/')
+        return files
+    
+    def infolist(self):
+        """Return list of ZipInfo-like objects"""
+        class FileInfo:
+            def __init__(self, filename, directory_path):
+                self.filename = filename
+                self.directory_path = directory_path
+            
+            def is_dir(self):
+                """Check if this represents a directory"""
+                return self.filename.endswith('/')
+        
+        return [FileInfo(name, self.directory_path) for name in self.namelist()]
+    
+    def close(self):
+        """No-op for compatibility"""
+        pass
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, *args):
+        self.close()
+
+
 class Dataset(torch.utils.data.Dataset):
     def __init__(
         self,
@@ -60,9 +113,18 @@ class Dataset(torch.utils.data.Dataset):
         self.is_crowd_by_id = {}
 
         if annotations_json_path_in_zip is not None:
-            with zipfile.ZipFile(target_zip_path or zip_path) as outer_target_zip:
+            # Check if path is a directory or ZIP file
+            anno_path = target_zip_path or zip_path
+            path_obj = Path(anno_path)
+            
+            if path_obj.is_dir():
+                outer_target_zip = DirectoryZipAdapter(path_obj)
+            else:
+                outer_target_zip = zipfile.ZipFile(anno_path)
+            
+            with outer_target_zip:
                 with outer_target_zip.open(
-                    str(annotations_json_path_in_zip), "r"
+                    annotations_json_path_in_zip.as_posix(), "r"
                 ) as file:
                     annotation_data = json.load(file)
 
@@ -95,11 +157,12 @@ class Dataset(torch.utils.data.Dataset):
                     self.labels_by_id[img_filename][annotation["id"]] = annotation[
                         "category_id"
                     ]
-                    self.polygons_by_id[img_filename][annotation["id"]] = annotation[
-                        "segmentation"
-                    ]
+                    if "segmentation" in annotation:
+                        self.polygons_by_id[img_filename][annotation["id"]] = annotation[
+                            "segmentation"
+                        ]
                     self.is_crowd_by_id[img_filename][annotation["id"]] = bool(
-                        annotation["iscrowd"]
+                        annotation.get("iscrowd", False)
                     )
 
         self.imgs = []
@@ -232,26 +295,44 @@ class Dataset(torch.utils.data.Dataset):
             self.target_instance_zip = {}
 
         if worker not in self.zip:
-            self.zip[worker] = zipfile.ZipFile(self.zip_path)
+            # Check if path is a directory or ZIP file
+            path_obj = Path(self.zip_path)
+            if path_obj.is_dir():
+                self.zip[worker] = DirectoryZipAdapter(path_obj)
+            else:
+                self.zip[worker] = zipfile.ZipFile(self.zip_path)
+        
         if worker not in self.target_zip:
             if self.target_zip_path:
-                self.target_zip[worker] = zipfile.ZipFile(self.target_zip_path)
+                # Check if path is a directory or ZIP file
+                target_path_obj = Path(self.target_zip_path)
+                if target_path_obj.is_dir():
+                    self.target_zip[worker] = DirectoryZipAdapter(target_path_obj)
+                else:
+                    self.target_zip[worker] = zipfile.ZipFile(self.target_zip_path)
+                
                 if self.target_zip_path_in_zip:
                     with self.target_zip[worker].open(
-                        str(self.target_zip_path_in_zip)
+                        str(self.target_zip_path_in_zip).replace('\\', '/')
                     ) as target_zip_stream:
                         nested_zip_data = BytesIO(target_zip_stream.read())
                     self.target_zip[worker].close()
                     self.target_zip[worker] = zipfile.ZipFile(nested_zip_data)
             else:
                 self.target_zip[worker] = self.zip[worker]
+        
         if (
             self.target_instance_zip_path is not None
             and worker not in self.target_instance_zip
         ):
-            self.target_instance_zip[worker] = zipfile.ZipFile(
-                self.target_instance_zip_path
-            )
+            # Check if path is a directory or ZIP file
+            instance_path_obj = Path(self.target_instance_zip_path)
+            if instance_path_obj.is_dir():
+                self.target_instance_zip[worker] = DirectoryZipAdapter(instance_path_obj)
+            else:
+                self.target_instance_zip[worker] = zipfile.ZipFile(
+                    self.target_instance_zip_path
+                )
 
         return (
             self.zip[worker],
