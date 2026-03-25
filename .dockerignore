@@ -7,4 +7,5 @@ __pycache__/
 datasets/
 logs/
 wandb/
+artifacts/
 .ipynb_checkpoints/
